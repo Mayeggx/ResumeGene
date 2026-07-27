@@ -51,7 +51,7 @@ FONT = "ResumeCJK"
 PAGE_W, PAGE_H = A4
 # Compact A4 geometry: wider text measure reduces wrapping while preserving
 # comfortable print margins for a dense one-page technical resume.
-LEFT = RIGHT = 14 * mm
+LEFT = RIGHT = 16 * mm
 TOP = BOTTOM = 11 * mm
 
 
@@ -239,6 +239,29 @@ class TitleWithTags(Flowable):
             x += tag_width + self.tag_gap
 
 
+class ProjectTitle(Flowable):
+    """A nested project heading that stays visually distinct from its employer."""
+
+    accent = colors.HexColor("#4A83DE")
+
+    def __init__(self, text: str, font_size: float = 10.1, leading: float = 13.0):
+        super().__init__()
+        self.text, self.font_size, self.height = text, font_size, leading
+        self.text_offset = 3.1 * mm
+
+    def wrap(self, available_width, available_height):
+        self.width = available_width
+        return available_width, self.height
+
+    def draw(self):
+        self.canv.setFillColor(self.accent)
+        self.canv.roundRect(0, 1.4, 1.15 * mm, self.height - 2.8, 0.55 * mm, fill=1, stroke=0)
+        self.canv.setFillColor(colors.black)
+        self.canv.setFont("ResumeCJKBold", self.font_size)
+        text_y = (self.height - self.font_size) / 2 + 1.2
+        self.canv.drawString(self.text_offset, text_y, self.text)
+
+
 def entry_flowables(entry: Entry, s: dict[str, ParagraphStyle], available: float, *, is_portfolio_project: bool = False) -> list:
     title, tags = split_school_tags(entry.title)
     left = [TitleWithTags(title, tags, s["entry"].fontSize, s["entry"].leading)] if tags else [paragraph(title, s["entry"])]
@@ -260,14 +283,30 @@ def entry_flowables(entry: Entry, s: dict[str, ParagraphStyle], available: float
     for text in entry.bullets:
         result.append(paragraph(f"•　{text}", s["bullet"]))
     for project in entry.projects:
-        result.extend(entry_flowables(project, s, available))
+        # `###` projects belong to the preceding employer. Render them as an
+        # explicit nested layer instead of another experience title.
+        result.extend([Spacer(1, 0.7 * mm), ProjectTitle(project.title)])
+        result.extend(paragraph(text, s["body"]) for text in project.paragraphs)
+        result.extend(paragraph(f"•　{text}", s["bullet"]) for text in project.bullets)
     return result
 
 
 def build(meta: dict[str, str], sections: Iterable[Section], avatar: Path | None, output: Path) -> None:
     available = PAGE_W - LEFT - RIGHT
     doc = BaseDocTemplate(str(output), pagesize=A4, leftMargin=LEFT, rightMargin=RIGHT, topMargin=TOP, bottomMargin=BOTTOM)
-    doc.addPageTemplates([PageTemplate(id="resume", frames=[Frame(LEFT, BOTTOM, available, PAGE_H - TOP - BOTTOM, id="body")])])
+    # Tables already use the full content width. Remove Frame's implicit
+    # 6-point padding so ordinary paragraphs share the same right boundary.
+    doc.addPageTemplates([PageTemplate(id="resume", frames=[Frame(
+        LEFT,
+        BOTTOM,
+        available,
+        PAGE_H - TOP - BOTTOM,
+        id="body",
+        leftPadding=0,
+        rightPadding=0,
+        topPadding=0,
+        bottomPadding=0,
+    )])])
     s = styles()
     story: list = []
     profile = [paragraph(meta["name"], s["name"])] + [paragraph(row, s["contact"]) for row in meta_rows(meta)]
