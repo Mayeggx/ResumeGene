@@ -1,0 +1,24 @@
+# macOS and editor metadata
+.DS_Store
+.idea/
+.vscode/
+
+# Python runtime and test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# Build and generated resume artifacts
+output/
+tmp/
+*.log
+
+# Local secrets and environment overrides
+.env
+.env.*
+!.env.example
