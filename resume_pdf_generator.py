@@ -51,8 +51,8 @@ FONT = "ResumeCJK"
 PAGE_W, PAGE_H = A4
 # Compact A4 geometry: wider text measure reduces wrapping while preserving
 # comfortable print margins for a dense one-page technical resume.
-LEFT = RIGHT = 11 * mm
-TOP = BOTTOM = 9 * mm
+LEFT = RIGHT = 14 * mm
+TOP = BOTTOM = 11 * mm
 
 
 @dataclass
