@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Iterable
 
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_LEFT, TA_RIGHT
+from reportlab.lib.enums import TA_JUSTIFY, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
@@ -32,15 +32,16 @@ from reportlab.platypus import (
 
 # macOS ships these CJK fonts. Embedding the TrueType outlines keeps the PDF
 # portable (unlike a device-dependent CID font), including in Poppler preview.
-# Songti's horizontal punctuation is correctly positioned in generated PDFs.
-# Some CJK sans TTC faces map punctuation to their vertical presentation glyphs.
+# Songti SC has reliable horizontal punctuation for ReportLab's TrueType
+# embedding. Its regular and bold faces preserve a professional resume tone.
 DEFAULT_FONT_PATH = "/System/Library/Fonts/Supplemental/Songti.ttc"
+DEFAULT_BOLD_FONT_PATH = DEFAULT_FONT_PATH
 FONT_PATH = Path(os.environ.get("RESUME_FONT_PATH", DEFAULT_FONT_PATH))
-FONT_BOLD_PATH = Path(os.environ.get("RESUME_BOLD_FONT_PATH", DEFAULT_FONT_PATH))
-# Songti.ttc contains multiple faces: 6 is Songti SC Regular and 1 is Songti
-# SC Bold. Keeping these explicit preserves the intended body/title contrast.
+FONT_BOLD_PATH = Path(os.environ.get("RESUME_BOLD_FONT_PATH", DEFAULT_BOLD_FONT_PATH))
+# Songti.ttc contains Songti SC Regular at index 6 and Songti SC Bold at index
+# 1. Keeping the faces explicit prevents fallback punctuation glyphs.
 FONT_INDEX = int(os.environ.get("RESUME_FONT_INDEX", "6" if str(FONT_PATH) == DEFAULT_FONT_PATH else "0"))
-BOLD_FONT_INDEX = int(os.environ.get("RESUME_BOLD_FONT_INDEX", "1" if str(FONT_BOLD_PATH) == DEFAULT_FONT_PATH else "0"))
+BOLD_FONT_INDEX = int(os.environ.get("RESUME_BOLD_FONT_INDEX", "1" if str(FONT_BOLD_PATH) == DEFAULT_BOLD_FONT_PATH else "0"))
 if not FONT_PATH.exists():
     raise RuntimeError("A CJK TrueType font is required. Set RESUME_FONT_PATH to a .ttf/.ttc font file.")
 pdfmetrics.registerFont(TTFont("ResumeCJK", str(FONT_PATH), subfontIndex=FONT_INDEX))
@@ -156,8 +157,25 @@ def styles() -> dict[str, ParagraphStyle]:
         "contact": ParagraphStyle("contact", **common, fontSize=10.5, leading=13),
         "entry": ParagraphStyle("entry", textColor=colors.black, fontName="ResumeCJKBold", fontSize=10.6, leading=13, spaceAfter=0),
         "sub": ParagraphStyle("sub", **common, fontSize=9.8, leading=12.2),
-        "body": ParagraphStyle("body", **common, fontSize=9.2, leading=11.4, spaceAfter=0),
-        "bullet": ParagraphStyle("bullet", **common, fontSize=9.2, leading=11.4, leftIndent=4.5 * mm, firstLineIndent=-3.4 * mm),
+        "body": ParagraphStyle(
+            "body",
+            **common,
+            fontSize=9.2,
+            leading=11.4,
+            spaceAfter=0,
+            alignment=TA_JUSTIFY,
+            justifyLastLine=0,
+        ),
+        "bullet": ParagraphStyle(
+            "bullet",
+            **common,
+            fontSize=9.2,
+            leading=11.4,
+            leftIndent=4.5 * mm,
+            firstLineIndent=-3.4 * mm,
+            alignment=TA_JUSTIFY,
+            justifyLastLine=0,
+        ),
         "right": ParagraphStyle("right", **common, fontSize=9.6, leading=12, alignment=TA_RIGHT),
     }
 
@@ -221,14 +239,18 @@ class TitleWithTags(Flowable):
             x += tag_width + self.tag_gap
 
 
-def entry_flowables(entry: Entry, s: dict[str, ParagraphStyle], available: float) -> list:
+def entry_flowables(entry: Entry, s: dict[str, ParagraphStyle], available: float, *, is_portfolio_project: bool = False) -> list:
     title, tags = split_school_tags(entry.title)
     left = [TitleWithTags(title, tags, s["entry"].fontSize, s["entry"].leading)] if tags else [paragraph(title, s["entry"])]
-    if entry.meta:
-        left.append(paragraph(entry.meta[0], s["sub"]))
+    # Project entries use `项目名称 | 时间` and do not display labels such as
+    # “个人项目”; the remaining value is shown on the title row at the right.
+    meta = [value for value in entry.meta if value not in {"个人项目", "团队项目"}] if is_portfolio_project else entry.meta
+    if meta and not is_portfolio_project:
+        left.append(paragraph(meta[0], s["sub"]))
     for text in entry.paragraphs:
         left.append(paragraph(text, s["body"]))
-    right_text = "<br/>".join(clean(value) for value in entry.meta[1:]) if len(entry.meta) > 1 else ""
+    right_values = meta if is_portfolio_project else meta[1:]
+    right_text = "<br/>".join(clean(value) for value in right_values)
     if right_text:
         table = Table([[left, paragraph(right_text, s["right"], markup=True)]], colWidths=[available - 47 * mm, 47 * mm], hAlign="LEFT")
         table.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0), ("TOPPADDING", (0, 0), (-1, -1), 0), ("BOTTOMPADDING", (0, 0), (-1, -1), 0)]))
@@ -263,6 +285,7 @@ def build(meta: dict[str, str], sections: Iterable[Section], avatar: Path | None
         story.extend(profile + [Spacer(1, 3 * mm)])
     for section in sections:
         heading = SectionTitle(section.title, available)
+        is_portfolio_project = section.title.strip() == "项目经历"
         # Keep the heading with only the first small content block. Keeping an
         # entire long experience together would create a mostly blank page.
         if section.paragraphs:
@@ -270,21 +293,21 @@ def build(meta: dict[str, str], sections: Iterable[Section], avatar: Path | None
             story.extend(paragraph(text, s["body"]) for text in section.paragraphs[1:])
             story.extend(paragraph(f"•　{text}", s["bullet"]) for text in section.bullets)
             for entry in section.entries:
-                story.append(KeepTogether(entry_flowables(entry, s, available) + [Spacer(1, 1.5 * mm)]))
+                story.append(KeepTogether(entry_flowables(entry, s, available, is_portfolio_project=is_portfolio_project) + [Spacer(1, 1.5 * mm)]))
         elif section.bullets:
             bullet_flowables = [paragraph(f"•　{text}", s["bullet"]) for text in section.bullets]
             # Keep short lists as a whole to avoid a lone final bullet on the
             # next page. Oversized lists still split normally when necessary.
             story.append(KeepTogether([heading, *bullet_flowables]))
             for entry in section.entries:
-                story.append(KeepTogether(entry_flowables(entry, s, available) + [Spacer(1, 1.5 * mm)]))
+                story.append(KeepTogether(entry_flowables(entry, s, available, is_portfolio_project=is_portfolio_project) + [Spacer(1, 1.5 * mm)]))
         elif section.entries:
             first_entry = section.entries[0]
-            first_flowables = entry_flowables(first_entry, s, available)
+            first_flowables = entry_flowables(first_entry, s, available, is_portfolio_project=is_portfolio_project)
             story.append(KeepTogether([heading, first_flowables[0]]))
             story.extend(first_flowables[1:] + [Spacer(1, 1.5 * mm)])
             for entry in section.entries[1:]:
-                story.append(KeepTogether(entry_flowables(entry, s, available) + [Spacer(1, 1.5 * mm)]))
+                story.append(KeepTogether(entry_flowables(entry, s, available, is_portfolio_project=is_portfolio_project) + [Spacer(1, 1.5 * mm)]))
         else:
             story.append(heading)
         story.append(Spacer(1, 1.4 * mm))
