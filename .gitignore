@@ -18,6 +18,9 @@ output/
 tmp/
 *.log
 
+# Private resume content (kept locally only)
+example_resume.md
+
 # Local secrets and environment overrides
 .env
 .env.*

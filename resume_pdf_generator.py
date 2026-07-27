@@ -48,8 +48,10 @@ pdfmetrics.registerFont(TTFont("ResumeCJKBold", str(FONT_BOLD_PATH), subfontInde
 pdfmetrics.registerFontFamily("ResumeCJK", normal="ResumeCJK", bold="ResumeCJKBold", italic="ResumeCJK", boldItalic="ResumeCJKBold")
 FONT = "ResumeCJK"
 PAGE_W, PAGE_H = A4
-LEFT = RIGHT = 18 * mm
-TOP, BOTTOM = 16 * mm, 15 * mm
+# Compact A4 geometry: wider text measure reduces wrapping while preserving
+# comfortable print margins for a dense one-page technical resume.
+LEFT = RIGHT = 11 * mm
+TOP = BOTTOM = 9 * mm
 
 
 @dataclass
@@ -146,7 +148,9 @@ class SectionTitle(Flowable):
 
 
 def styles() -> dict[str, ParagraphStyle]:
-    common = dict(fontName=FONT, textColor=colors.black)
+    # CJK wrapping lets mixed Chinese/English copy use the available line
+    # width instead of breaking early at an English word boundary.
+    common = dict(fontName=FONT, textColor=colors.black, wordWrap="CJK")
     return {
         "name": ParagraphStyle("name", textColor=colors.black, fontName="ResumeCJKBold", fontSize=20, leading=24, spaceAfter=3),
         "contact": ParagraphStyle("contact", **common, fontSize=10.5, leading=13),
@@ -268,8 +272,10 @@ def build(meta: dict[str, str], sections: Iterable[Section], avatar: Path | None
             for entry in section.entries:
                 story.append(KeepTogether(entry_flowables(entry, s, available) + [Spacer(1, 1.5 * mm)]))
         elif section.bullets:
-            story.append(KeepTogether([heading, paragraph(f"•　{section.bullets[0]}", s["bullet"])]))
-            story.extend(paragraph(f"•　{text}", s["bullet"]) for text in section.bullets[1:])
+            bullet_flowables = [paragraph(f"•　{text}", s["bullet"]) for text in section.bullets]
+            # Keep short lists as a whole to avoid a lone final bullet on the
+            # next page. Oversized lists still split normally when necessary.
+            story.append(KeepTogether([heading, *bullet_flowables]))
             for entry in section.entries:
                 story.append(KeepTogether(entry_flowables(entry, s, available) + [Spacer(1, 1.5 * mm)]))
         elif section.entries:
