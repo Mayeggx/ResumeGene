@@ -161,7 +161,7 @@ def styles() -> dict[str, ParagraphStyle]:
             "body",
             **common,
             fontSize=9.2,
-            leading=11.4,
+            leading=11.0,
             spaceAfter=0,
             alignment=TA_JUSTIFY,
             justifyLastLine=0,
@@ -170,7 +170,7 @@ def styles() -> dict[str, ParagraphStyle]:
             "bullet",
             **common,
             fontSize=9.2,
-            leading=11.4,
+            leading=11.0,
             leftIndent=4.5 * mm,
             firstLineIndent=-3.4 * mm,
             alignment=TA_JUSTIFY,
@@ -185,13 +185,37 @@ def paragraph(text: str, style: ParagraphStyle, *, markup: bool = False) -> Para
 
 
 def meta_rows(meta: dict[str, str]) -> list[str]:
+    language = meta.get("language", "zh").lower()
+    labels = {
+        "zh": {
+            "phone": "电话",
+            "email": "邮箱",
+            "age": "年龄",
+            "gender": "性别",
+            "country": "国家",
+            "status": "当前状态",
+            "location": "意向城市",
+        },
+        "en": {
+            "phone": "Phone",
+            "email": "Email",
+            "age": "Age",
+            "gender": "Gender",
+            "country": "Country",
+            "status": "Availability",
+            "location": "Preferred Location",
+        },
+    }.get(language, {})
+    if not labels:
+        raise ValueError("Metadata 'language' must be either 'zh' or 'en'.")
+
     rows = []
     if meta.get("phone") or meta.get("email"):
-        rows.append("  |  ".join(x for x in [f"电话：{meta['phone']}" if meta.get("phone") else "", f"邮箱：{meta['email']}" if meta.get("email") else ""] if x))
-    basic = [f"年龄：{meta['age']}" if meta.get("age") else "", f"性别：{meta['gender']}" if meta.get("gender") else ""]
+        rows.append("  |  ".join(x for x in [f"{labels['phone']}: {meta['phone']}" if meta.get("phone") else "", f"{labels['email']}: {meta['email']}" if meta.get("email") else ""] if x))
+    basic = [f"{labels['age']}: {meta['age']}" if meta.get("age") else "", f"{labels['gender']}: {meta['gender']}" if meta.get("gender") else "", f"{labels['country']}: {meta['country']}" if meta.get("country") else ""]
     if any(basic): rows.append("  |  ".join(x for x in basic if x))
     if meta.get("status") or meta.get("location"):
-        rows.append("  |  ".join(x for x in [f"当前状态：{meta['status']}" if meta.get("status") else "", f"意向城市：{meta['location']}" if meta.get("location") else ""] if x))
+        rows.append("  |  ".join(x for x in [f"{labels['status']}: {meta['status']}" if meta.get("status") else "", f"{labels['location']}: {meta['location']}" if meta.get("location") else ""] if x))
     return rows
 
 
@@ -293,14 +317,16 @@ def entry_flowables(entry: Entry, s: dict[str, ParagraphStyle], available: float
 
 def build(meta: dict[str, str], sections: Iterable[Section], avatar: Path | None, output: Path) -> None:
     available = PAGE_W - LEFT - RIGHT
-    doc = BaseDocTemplate(str(output), pagesize=A4, leftMargin=LEFT, rightMargin=RIGHT, topMargin=TOP, bottomMargin=BOTTOM)
+    compact = meta.get("layout", "standard").lower() == "compact"
+    top_bottom_margin = 8 * mm if compact else TOP
+    doc = BaseDocTemplate(str(output), pagesize=A4, leftMargin=LEFT, rightMargin=RIGHT, topMargin=top_bottom_margin, bottomMargin=top_bottom_margin)
     # Tables already use the full content width. Remove Frame's implicit
     # 6-point padding so ordinary paragraphs share the same right boundary.
     doc.addPageTemplates([PageTemplate(id="resume", frames=[Frame(
         LEFT,
-        BOTTOM,
+        top_bottom_margin,
         available,
-        PAGE_H - TOP - BOTTOM,
+        PAGE_H - 2 * top_bottom_margin,
         id="body",
         leftPadding=0,
         rightPadding=0,
@@ -308,6 +334,10 @@ def build(meta: dict[str, str], sections: Iterable[Section], avatar: Path | None
         bottomPadding=0,
     )])])
     s = styles()
+    if compact:
+        s["body"].leading = 10.45
+        s["bullet"].leading = 10.45
+        s["sub"].leading = 11.7
     story: list = []
     profile = [paragraph(meta["name"], s["name"])] + [paragraph(row, s["contact"]) for row in meta_rows(meta)]
     if avatar:
@@ -319,7 +349,7 @@ def build(meta: dict[str, str], sections: Iterable[Section], avatar: Path | None
         photo = Image(str(avatar), width=photo_width, height=profile_height)
         table = Table([[profile, photo]], colWidths=[available - 33 * mm, 33 * mm], hAlign="LEFT")
         table.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("ALIGN", (1, 0), (1, 0), "RIGHT"), ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0), ("TOPPADDING", (0, 0), (-1, -1), 0), ("BOTTOMPADDING", (0, 0), (-1, -1), 0)]))
-        story.extend([table, Spacer(1, 3 * mm)])
+        story.extend([table, Spacer(1, 2.5 * mm)])
     else:
         story.extend(profile + [Spacer(1, 3 * mm)])
     for section in sections:
@@ -335,9 +365,11 @@ def build(meta: dict[str, str], sections: Iterable[Section], avatar: Path | None
                 story.append(KeepTogether(entry_flowables(entry, s, available, is_portfolio_project=is_portfolio_project) + [Spacer(1, 1.5 * mm)]))
         elif section.bullets:
             bullet_flowables = [paragraph(f"•　{text}", s["bullet"]) for text in section.bullets]
-            # Keep short lists as a whole to avoid a lone final bullet on the
-            # next page. Oversized lists still split normally when necessary.
-            story.append(KeepTogether([heading, *bullet_flowables]))
+            # Keep the heading with the first bullet, but allow the remaining
+            # list to use available space on the current page. Keeping a whole
+            # skills section together can otherwise create a nearly blank page.
+            story.append(KeepTogether([heading, bullet_flowables[0]]))
+            story.extend(bullet_flowables[1:])
             for entry in section.entries:
                 story.append(KeepTogether(entry_flowables(entry, s, available, is_portfolio_project=is_portfolio_project) + [Spacer(1, 1.5 * mm)]))
         elif section.entries:
@@ -349,7 +381,7 @@ def build(meta: dict[str, str], sections: Iterable[Section], avatar: Path | None
                 story.append(KeepTogether(entry_flowables(entry, s, available, is_portfolio_project=is_portfolio_project) + [Spacer(1, 1.5 * mm)]))
         else:
             story.append(heading)
-        story.append(Spacer(1, 1.4 * mm))
+        story.append(Spacer(1, 1.0 * mm))
     doc.build(story)
 
 
